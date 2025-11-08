@@ -1,0 +1,9 @@
+alphabet: "%-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_\u0110"
+image_color_mode: rgb
+img_height: 64
+img_width: 160
+interpolation: linear
+keep_aspect_ratio: true
+max_plate_slots: 13
+pad_char: _
+padding_color: 114

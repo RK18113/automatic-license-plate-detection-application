@@ -1,0 +1,50 @@
+model: cct
+rescaling:
+  offset: 0.0
+  scale: 0.00392156862745098
+tokenizer:
+  blocks:
+  - filters: 32
+    kernel_size: 3
+    layer: Conv2D
+    strides: 1
+  - filter_size: 3
+    layer: MaxBlurPooling2D
+    pool_size: 2
+  - filters: 48
+    kernel_size: 3
+    layer: Conv2D
+    strides: 1
+  - filters: 64
+    kernel_size: 3
+    layer: Conv2D
+    strides: 1
+  - filter_size: 3
+    layer: MaxBlurPooling2D
+    pool_size: 2
+  - filters: 64
+    kernel_size: 3
+    layer: Conv2D
+    strides: 1
+  patch_mlp:
+    activation: gelu
+    dropout_rate: 0.05
+    hidden_units:
+    - 64
+    layer: MLP
+  patch_size: 2
+  positional_emb: true
+transformer_encoder:
+  activation: gelu
+  attention_dropout: 0.05
+  head_mlp_dropout: 0.05
+  heads: 2
+  layers: 3
+  mlp_dropout: 0.1
+  normalization: layer_norm
+  projection_dim: 64
+  stochastic_depth: 0.05
+  token_reducer_heads: 2
+  units:
+  - 64
+  - 64

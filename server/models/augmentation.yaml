@@ -1,0 +1,71 @@
+__version__: 2.0.8
+transform:
+  __class_fullname__: Compose
+  additional_targets: {}
+  bbox_params: null
+  is_check_shapes: true
+  keypoint_params: null
+  p: 1.0
+  transforms:
+  - __class_fullname__: RandomBrightnessContrast
+    brightness_by_max: true
+    brightness_limit:
+    - -0.2
+    - 0.2
+    contrast_limit:
+    - -0.2
+    - 0.2
+    ensure_safe_range: false
+    p: 0.8
+  - __class_fullname__: MotionBlur
+    allow_shifted: true
+    angle_range:
+    - 0.0
+    - 360.0
+    blur_limit:
+    - 3
+    - 7
+    direction_range:
+    - -1.0
+    - 1.0
+    p: 0.3
+  - __class_fullname__: GaussNoise
+    mean_range:
+    - 0.0
+    - 0.0
+    noise_scale_factor: 1.0
+    p: 0.3
+    per_channel: true
+    std_range:
+    - 0.2
+    - 0.44
+  - __class_fullname__: RandomGamma
+    gamma_limit:
+    - 80.0
+    - 120.0
+    p: 0.3
+  - __class_fullname__: CoarseDropout
+    fill: 0.0
+    fill_mask: null
+    hole_height_range:
+    - 2
+    - 4
+    hole_width_range:
+    - 2
+    - 4
+    num_holes_range:
+    - 5
+    - 10
+    p: 0.2
+  - __class_fullname__: Rotate
+    border_mode: 0
+    crop_border: false
+    fill: 0.0
+    fill_mask: 0.0
+    interpolation: 1
+    limit:
+    - -5.0
+    - 5.0
+    mask_interpolation: 0
+    p: 0.3
+    rotate_method: largest_box
