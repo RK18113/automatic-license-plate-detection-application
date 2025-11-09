@@ -20,11 +20,6 @@ load_dotenv()
 
 # Model Paths
 YOLO_MODEL_PATH = os.getenv("YOLO_MODEL_PATH", "./models/best.pt")
-
-# FastPlate OCR Model (pre-trained from fast-plate-ocr)
-# Available models: 
-# - 'cct-xs-v1-global-model' (fastest, 3094 PPS)
-# - 'cct-s-v1-global-model' (slower, 1701 PPS, better accuracy)
 FASTPLATE_MODEL_NAME = os.getenv("FASTPLATE_MODEL_NAME", "cct-xs-v1-global-model")
 
 # API Keys
@@ -55,7 +50,7 @@ MIN_SCALE_FACTOR = float(os.getenv("MIN_SCALE_FACTOR", "2.0"))
 # Gemini Configuration
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
 GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.3"))
-GEMINI_MAX_TOKENS = int(os.getenv("GEMINI_MAX_TOKENS", "500"))
+GEMINI_MAX_TOKENS = int(os.getenv("GEMINI_MAX_TOKENS", "1000"))
 
 # CORS Configuration
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
@@ -98,14 +93,14 @@ try:
 except Exception as e:
     print(f"❌ Error loading YOLO: {e}")
 
-# Load FastPlate OCR (Pre-trained LicensePlateRecognizer)
+# Load FastPlate OCR
 try:
     print(f"📥 Loading FastPlate OCR model: {FASTPLATE_MODEL_NAME}")
     ocr_model = LicensePlateRecognizer(FASTPLATE_MODEL_NAME)
     print(f"✅ FastPlate OCR model '{FASTPLATE_MODEL_NAME}' loaded successfully")
 except Exception as e:
     print(f"❌ Error loading FastPlate OCR: {e}")
-    print("💡 Make sure you installed: pip install 'fast-plate-ocr[onnx-gpu]'")
+    print("💡 Make sure you installed: pip install 'fast-plate-ocr[onnx]'")
     import traceback
     traceback.print_exc()
 
@@ -147,48 +142,165 @@ def clean_plate_text(text):
     cleaned = re.sub(r'\s+', '', cleaned).strip()
     return cleaned if len(cleaned) >= OCR_MIN_TEXT_LENGTH else ""
 
-def get_vehicle_insights_from_gemini(plate_text):
-    """Get vehicle insights using Gemini API"""
-    if not gemini_client or not plate_text:
+def get_vehicle_insights_from_gemini(plate_text, plate_crop_image=None, full_image=None):
+    """
+    Get comprehensive vehicle insights using Gemini Vision API
+    
+    Args:
+        plate_text: Detected license plate text
+        plate_crop_image: Cropped image of the license plate (numpy array RGB)
+        full_image: Full vehicle image (numpy array RGB)
+    """
+    if not gemini_client:
         return {
-            "country": "Unknown",
-            "state": "Unknown",
-            "vehicle_type": "Unknown",
-            "validity": "Unknown",
-            "additional_info": "Gemini API not available"
+            "error": "Gemini API not available"
         }
     
     try:
+        print(f"\n{'='*60}")
+        print(f"🤖 GEMINI VISION DEBUG")
+        print(f"{'='*60}")
+        print(f"Plate text: {plate_text}")
+        print(f"Full image type: {type(full_image)}")
+        print(f"Full image shape: {full_image.shape if full_image is not None else 'None'}")
+        print(f"Plate crop type: {type(plate_crop_image)}")
+        print(f"Plate crop shape: {plate_crop_image.shape if plate_crop_image is not None else 'None'}")
+        
+        # Prepare the prompt
         prompt = f"""
-        Analyze this vehicle license plate number: {plate_text}
+        Analyze this vehicle image and provide detailed information.
         
-        Provide the following information in a structured format:
-        1. Country of origin
-        2. State/Region (if applicable)
-        3. Possible vehicle type or category
-        4. Format validity (is this a valid license plate format?)
-        5. Any additional insights about the vehicle or registration
+        **Detected License Plate Number: {plate_text}**
         
-        If you cannot determine certain information, say "Unknown" for that field.
-        Keep responses concise and factual.
+        Please provide a comprehensive analysis including:
+        
+        1. **License Plate Analysis:**
+           - Country of origin
+           - State/Region (if applicable)
+           - Format validity
+           - Registration type (private/commercial/government)
+        
+        2. **Vehicle Identification:**
+           - Make and model (be as specific as possible)
+           - Approximate year/generation
+           - Body type (sedan, SUV, hatchback, truck, etc.)
+           - Color
+        
+        3. **Visual Details:**
+           - Any visible damage or modifications
+           - Condition (excellent/good/fair/poor)
+           - Special features or accessories visible
+        
+        4. **Additional Observations:**
+           - Environment/location context
+           - Time of day (if determinable)
+           - Any other relevant details
+        
+        Provide the response in a clear, structured markdown format.
+        If you cannot determine certain information, mention "Unable to determine" for that field.
         """
         
+        # Prepare content parts
+        content_parts = []
+        
+        # Add full image if available
+        if full_image is not None:
+            try:
+                print(f"📸 Processing full image...")
+                
+                # Make sure it's in the right format
+                if len(full_image.shape) == 3 and full_image.shape[2] == 3:
+                    # Convert RGB to BGR for cv2.imencode
+                    full_image_bgr = cv2.cvtColor(full_image, cv2.COLOR_RGB2BGR)
+                    
+                    # Encode to JPEG
+                    success, buffer = cv2.imencode('.jpg', full_image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    
+                    if not success:
+                        print(f"❌ Failed to encode image")
+                        raise Exception("Image encoding failed")
+                    
+                    # Convert to bytes
+                    image_bytes = buffer.tobytes()
+                    print(f"✅ Image encoded: {len(image_bytes)} bytes")
+                    
+                    # Create Part from bytes
+                    image_part = types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type="image/jpeg"
+                    )
+                    
+                    content_parts.append(image_part)
+                    print(f"✅ Image part created and added")
+                else:
+                    print(f"⚠️ Unexpected image shape: {full_image.shape}")
+                    
+            except Exception as img_err:
+                print(f"❌ Failed to process image: {img_err}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"⚠️ No full image provided")
+        
+        # Add plate crop if available
+        if plate_crop_image is not None:
+            try:
+                print(f"📸 Processing plate crop...")
+                
+                if len(plate_crop_image.shape) == 3 and plate_crop_image.shape[2] == 3:
+                    # Convert RGB to BGR
+                    plate_crop_bgr = cv2.cvtColor(plate_crop_image, cv2.COLOR_RGB2BGR)
+                    
+                    # Encode to JPEG
+                    success, buffer = cv2.imencode('.jpg', plate_crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    
+                    if success:
+                        plate_bytes = buffer.tobytes()
+                        print(f"✅ Plate crop encoded: {len(plate_bytes)} bytes")
+                        
+                        # Create Part from bytes
+                        plate_part = types.Part.from_bytes(
+                            data=plate_bytes,
+                            mime_type="image/jpeg"
+                        )
+                        
+                        content_parts.append(plate_part)
+                        print(f"✅ Plate crop part created and added")
+                    
+            except Exception as crop_err:
+                print(f"⚠️ Failed to process plate crop: {crop_err}")
+        
+        # Add prompt at the BEGINNING
+        content_parts.insert(0, prompt)
+        
+        print(f"\n📤 Sending to Gemini:")
+        print(f"   Total parts: {len(content_parts)}")
+        print(f"   Part types: {[type(p).__name__ for p in content_parts]}")
+        
+        # Make Gemini API call
         response = gemini_client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=prompt,
+            contents=content_parts,
             config=types.GenerateContentConfig(
                 temperature=GEMINI_TEMPERATURE,
                 max_output_tokens=GEMINI_MAX_TOKENS
             )
         )
         
+        print(f"✅ Gemini response received: {len(response.text)} characters")
+        print(f"{'='*60}\n")
+        
         return {
             "raw_analysis": response.text,
             "plate_number": plate_text,
-            "ai_provider": f"Gemini ({GEMINI_MODEL})"
+            "ai_provider": f"Gemini ({GEMINI_MODEL}) with Vision",
+            "has_image_analysis": True
         }
+        
     except Exception as e:
-        print(f"Gemini API error: {e}")
+        print(f"❌ Gemini API error: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "error": str(e),
             "plate_number": plate_text,
@@ -242,8 +354,7 @@ async def root():
         "endpoints": {
             "/detect": "POST - Detect and recognize license plates",
             "/health": "GET - Check system health",
-            "/test": "GET - Test model status",
-            "/benchmark": "GET - Run OCR benchmark"
+            "/test": "GET - Test model status"
         }
     }
 
@@ -270,32 +381,10 @@ async def test_models():
         "system_ready": all([yolo_model, ocr_model])
     }
 
-@app.get("/benchmark")
-async def benchmark_ocr():
-    """Run OCR model benchmark"""
-    if not ocr_model:
-        raise HTTPException(status_code=503, detail="OCR model not loaded")
-    
-    try:
-        print("🔥 Running OCR benchmark...")
-        benchmark_results = ocr_model.benchmark()
-        return {
-            "status": "success",
-            "model": FASTPLATE_MODEL_NAME,
-            "benchmark": benchmark_results
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Benchmark error: {str(e)}")
-
 @app.post("/detect")
 async def detect_license_plates(file: UploadFile = File(...)):
     """
-    Main detection endpoint with bounding box visualization
-    
-    - Detects license plates using YOLO
-    - Recognizes text using FastPlate OCR (LicensePlateRecognizer)
-    - Gets vehicle insights using Gemini AI
-    - Returns annotated image with bounding boxes
+    Main detection endpoint with bounding box visualization and Gemini Vision analysis
     """
     
     if not yolo_model or not ocr_model:
@@ -373,15 +462,14 @@ async def detect_license_plates(file: UploadFile = File(...)):
                     ocr_confidence = 0.0
                     
                     try:
-                        # FastPlate OCR accepts numpy arrays directly
+                        # Run FastPlate OCR
                         print(f"🔄 Running FastPlate OCR on detection #{i+1}...")
                         ocr_result = ocr_model.run(enhanced_plate)
                         
-                        print(f"🔤 Raw OCR output for detection #{i+1}: '{ocr_result}'")
+                        print(f"🔤 Raw OCR output for detection #{i+1}: {ocr_result}")
                         
-                        # Handle different return types (string, list, or other)
+                        # Handle different return types
                         if ocr_result:
-                            # If it's a list, take the first element
                             if isinstance(ocr_result, list) and len(ocr_result) > 0:
                                 raw_text = str(ocr_result[0])
                             elif isinstance(ocr_result, str):
@@ -389,28 +477,27 @@ async def detect_license_plates(file: UploadFile = File(...)):
                             else:
                                 raw_text = str(ocr_result)
                             
-                            # Clean the text
                             plate_text = clean_plate_text(raw_text)
                             
                             if plate_text:
                                 ocr_confidence = 0.92
                                 print(f"✅ Cleaned plate text #{i+1}: '{plate_text}'")
-                            else:
-                                print(f"⚠️ OCR text became empty after cleaning")
-                        else:
-                            print(f"⚠️ OCR returned empty or invalid result for detection #{i+1}")
-
+                        
                     except Exception as ocr_error:
                         print(f"❌ OCR Error on detection #{i+1}: {ocr_error}")
                         import traceback
                         traceback.print_exc()
                         plate_text = "OCR_ERROR"
                     
-                    # Get Gemini insights
+                    # Get Gemini Vision insights - PASS THE IMAGES!
                     vehicle_insights = None
                     if plate_text and plate_text not in ["NO_TEXT_DETECTED", "OCR_ERROR", ""]:
                         print(f"🤖 Getting Gemini insights for '{plate_text}'...")
-                        vehicle_insights = get_vehicle_insights_from_gemini(plate_text)
+                        vehicle_insights = get_vehicle_insights_from_gemini(
+                            plate_text=plate_text,
+                            plate_crop_image=plate_crop,  # ← IMPORTANT: Pass plate crop
+                            full_image=image_rgb           # ← IMPORTANT: Pass full image
+                        )
                     
                     # Prepare detection result
                     detection = {
@@ -464,8 +551,7 @@ async def detect_license_plates(file: UploadFile = File(...)):
 @app.post("/analyze-plate")
 async def analyze_plate_text(plate_number: str):
     """
-    Standalone endpoint to get vehicle insights from plate number
-    without image upload
+    Standalone endpoint to get vehicle insights from plate number without image upload
     """
     if not gemini_client:
         raise HTTPException(
