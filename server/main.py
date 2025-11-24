@@ -48,7 +48,7 @@ MIN_PLATE_WIDTH = int(os.getenv("MIN_PLATE_WIDTH", "150"))
 MIN_SCALE_FACTOR = float(os.getenv("MIN_SCALE_FACTOR", "2.0"))
 
 # Gemini Configuration
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.3"))
 GEMINI_MAX_TOKENS = int(os.getenv("GEMINI_MAX_TOKENS", "1000"))
 
@@ -151,6 +151,7 @@ def get_vehicle_insights_from_gemini(plate_text, plate_crop_image=None, full_ima
         plate_crop_image: Cropped image of the license plate (numpy array RGB)
         full_image: Full vehicle image (numpy array RGB)
     """
+    
     if not gemini_client:
         return {
             "error": "Gemini API not available"
@@ -208,23 +209,17 @@ def get_vehicle_insights_from_gemini(plate_text, plate_crop_image=None, full_ima
             try:
                 print(f"📸 Processing full image...")
                 
-                # Make sure it's in the right format
                 if len(full_image.shape) == 3 and full_image.shape[2] == 3:
-                    # Convert RGB to BGR for cv2.imencode
                     full_image_bgr = cv2.cvtColor(full_image, cv2.COLOR_RGB2BGR)
-                    
-                    # Encode to JPEG
                     success, buffer = cv2.imencode('.jpg', full_image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
                     
                     if not success:
                         print(f"❌ Failed to encode image")
                         raise Exception("Image encoding failed")
                     
-                    # Convert to bytes
                     image_bytes = buffer.tobytes()
                     print(f"✅ Image encoded: {len(image_bytes)} bytes")
                     
-                    # Create Part from bytes
                     image_part = types.Part.from_bytes(
                         data=image_bytes,
                         mime_type="image/jpeg"
@@ -248,17 +243,13 @@ def get_vehicle_insights_from_gemini(plate_text, plate_crop_image=None, full_ima
                 print(f"📸 Processing plate crop...")
                 
                 if len(plate_crop_image.shape) == 3 and plate_crop_image.shape[2] == 3:
-                    # Convert RGB to BGR
                     plate_crop_bgr = cv2.cvtColor(plate_crop_image, cv2.COLOR_RGB2BGR)
-                    
-                    # Encode to JPEG
                     success, buffer = cv2.imencode('.jpg', plate_crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
                     
                     if success:
                         plate_bytes = buffer.tobytes()
                         print(f"✅ Plate crop encoded: {len(plate_bytes)} bytes")
                         
-                        # Create Part from bytes
                         plate_part = types.Part.from_bytes(
                             data=plate_bytes,
                             mime_type="image/jpeg"
@@ -279,13 +270,25 @@ def get_vehicle_insights_from_gemini(plate_text, plate_crop_image=None, full_ima
         
         # Make Gemini API call
         response = gemini_client.models.generate_content(
-            model=GEMINI_MODEL,
+            model=GEMINI_MODEL,  # This will now use "gemini-1.5-flash"
             contents=content_parts,
             config=types.GenerateContentConfig(
                 temperature=GEMINI_TEMPERATURE,
                 max_output_tokens=GEMINI_MAX_TOKENS
             )
         )
+        
+        # === THIS IS THE FIX FROM LAST TIME ===
+        # Check if the response text is None (due to safety block, etc.)
+        if response.text is None:
+            print("❌ Gemini response was empty or blocked.")
+            try:
+                # Try to log safety feedback if it exists
+                print(f"   Safety Feedback: {response.prompt_feedback}")
+            except Exception:
+                pass # No feedback available
+            raise Exception("Gemini returned an empty or blocked response.")
+        # === END OF FIX ===
         
         print(f"✅ Gemini response received: {len(response.text)} characters")
         print(f"{'='*60}\n")
@@ -306,7 +309,6 @@ def get_vehicle_insights_from_gemini(plate_text, plate_crop_image=None, full_ima
             "plate_number": plate_text,
             "ai_provider": "Gemini (Error)"
         }
-
 def draw_boxes_on_image(image, detections):
     """Draw bounding boxes and labels on image"""
     annotated = image.copy()
